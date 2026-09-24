@@ -1,36 +1,67 @@
 """
-Block 0 scaffold — SQLite for local hello-world / early development.
-
-Swap get_conn() for a psycopg2/asyncpg Postgres connection once Vandanaa's
-Block 1 schema load (data/schema.sql into Postgres + pgvector) is done.
-Everything downstream (retrieval.py, rerank.py) should only ever call
-get_conn() — never import sqlite3 directly elsewhere — so that swap is
-one function, not a grep-and-replace.
+Connection helper for backend/app/*. Deliberately a near-duplicate of
+backend/ingestion/db.py rather than a shared import across the two
+directories — ingestion is a one-off offline job, the app is a long-lived
+FastAPI process, and Block 5's eval harness needs to import from here
+without dragging in the ingestion package. If this drifts out of sync
+during the sprint, that's the tradeoff; revisit post-hackathon.
 """
-import sqlite3
-from pathlib import Path
-from contextlib import contextmanager
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "APS-04.db"
+from __future__ import annotations
 
+import os
 
-@contextmanager
-def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-    finally:
-        conn.close()
+import psycopg2
+import psycopg2.pool
+from pgvector.psycopg2 import register_vector
+
+_pool: psycopg2.pool.SimpleConnectionPool | None = None
 
 
-def healthcheck() -> dict:
-    """Proves the DB file is real and queryable — not a mock."""
-    with get_conn() as conn:
-        cur = conn.cursor()
-        counts = {}
-        for table in ("hotels", "activities_poi", "tour_packages",
-                      "eval_queries", "eval_relevance_labels", "user_interactions"):
-            cur.execute(f"SELECT COUNT(*) FROM {table}")
-            counts[table] = cur.fetchone()[0]
-        return counts
+def _connect_kwargs():
+    return dict(
+        host=os.environ.get("PGHOST", "localhost"),
+        port=os.environ.get("PGPORT", "5432"),
+        dbname=os.environ.get("PGDATABASE", "wanderwise"),
+        user=os.environ.get("PGUSER", "postgres"),
+        password=os.environ.get("PGPASSWORD", ""),
+    )
+
+
+def init_pool(minconn: int = 1, maxconn: int = 10):
+    """Call once, at FastAPI startup. A single Postgres instance (see
+    ARCHITECTURE.md § 6) still benefits from a small pool instead of opening
+    a new connection per request under load-testing or demo-day traffic."""
+    global _pool
+    if _pool is None:
+        _pool = psycopg2.pool.SimpleConnectionPool(minconn, maxconn, **_connect_kwargs())
+    return _pool
+
+
+def get_connection():
+    """Borrow a connection from the pool, with pgvector adapters registered.
+
+    Callers MUST return it with release_connection() (a `try/finally` or the
+    `connection()` context manager below) — the pool is small enough that a
+    few leaked connections will exhaust it mid-demo.
+    """
+    pool = init_pool()
+    conn = pool.getconn()
+    register_vector(conn)
+    return conn
+
+
+def release_connection(conn):
+    if _pool is not None:
+        _pool.putconn(conn)
+
+
+class connection:
+    """Context manager wrapper: `with connection() as conn: ...`"""
+
+    def __enter__(self):
+        self.conn = get_connection()
+        return self.conn
+
+    def __exit__(self, exc_type, exc, tb):
+        release_connection(self.conn)
