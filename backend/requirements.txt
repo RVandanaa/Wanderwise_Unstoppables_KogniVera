@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pydantic
+
+# Needed from Block 1 onward — not required for Block 0's hello-world:
+# sentence-transformers   # paraphrase-multilingual-MiniLM-L12-v2 (ARCHITECTURE.md)
+# psycopg2-binary         # or asyncpg — swap in once schema is loaded into Postgres+pgvector
+# pgvector                # Python client for the vector type/ops
+# numpy
