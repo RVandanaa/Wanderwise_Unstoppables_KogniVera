@@ -1,0 +1,9 @@
+# Block 1 (Vandanaa) — schema load + embedding pipeline.
+# Later blocks (backend/API, eval harness) will extend this file; keeping it
+# scoped for now so Block 1 doesn't wait on packages other blocks need.
+
+psycopg2-binary==2.9.9
+pgvector==0.2.5
+sentence-transformers==2.7.0
+python-dotenv==1.0.1
+tqdm==4.66.4
